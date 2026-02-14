@@ -1,4 +1,4 @@
-# npsp v1.18
+# npsp v1.20
 
 **npsp** is a high-performance, native PSP game downloader and converter for the Nintendo Switch. It allows users to browse the **NoPayStation (NPS)** library, download titles in `.pkg` format directly to the console, and extract the internal `EBOOT.PBP` using real-time AES-128-CTR decryption.
 
