@@ -8,7 +8,7 @@ TOPDIR ?= $(CURDIR)
 
 APP_TITLE := npsp
 APP_AUTHOR := joaqmiu
-APP_VERSION := 1.18
+APP_VERSION := 1.20
 APP_ICON := icon.png
 
 include $(DEVKITPRO)/libnx/switch_rules
