@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <switch.h>
+#include <errno.h>
 
 #include "common.h"
 #include "converter.h"
@@ -12,12 +13,48 @@
 
 #define PAGE_SIZE 37
 
+int current_lang = LANG_EN;
+
+const LangStrings languages[LANG_COUNT] = {
+    { 
+        {"SEARCH", "ALL GAMES", "# (NUMBERS)", "JAPAN (JP)", "SETTINGS"},
+        {"Language: English", "Download Cheats", "Back to Menu"},
+        "DOWNLOADING PKG...", "CONVERTING...", "DONE!", "DOWNLOAD ERROR.", "[B] Cancel",
+        "Press A to return...", "No games found.", "RESULTS", "SETTINGS", "English",
+        "[A] Select  [Arrows] Navigate",
+        "[A] Download  [B] Back  [Arrows] Navigate",
+        "[B] Cancel",
+        "[A] Change/Select  [B] Back"
+    },
+    { 
+        {"PESQUISAR", "TODOS OS JOGOS", "# (NUMEROS)", "JAPAO (JP)", "OPCOES"},
+        {"Idioma: Portugues", "Baixar Cheats", "Voltar"},
+        "BAIXANDO PKG...", "CONVERTENDO...", "PRONTO!", "ERRO NO DOWNLOAD.", "[B] Cancelar",
+        "Pressione A para voltar...", "Nenhum jogo encontrado.", "RESULTADOS", "OPCOES", "Portugues",
+        "[A] Selecionar  [Setas] Navegar",
+        "[A] Baixar  [B] Voltar  [Setas] Navegar",
+        "[B] Cancelar",
+        "[A] Alterar/Selecionar  [B] Voltar"
+    },
+    { 
+        {"BUSCAR", "TODOS LOS JUEGOS", "# (NUMEROS)", "JAPON (JP)", "OPCIONES"},
+        {"Idioma: Espanol", "Descargar Cheats", "Volver"},
+        "DESCARGANDO PKG...", "CONVIRTIENDO...", "HECHO!", "ERROR DE DESCARGA.", "[B] Cancelar",
+        "Presiona A para volver...", "No se encontraron juegos.", "RESULTADOS", "OPCIONES", "Espanol",
+        "[A] Seleccionar  [Flechas] Navegar",
+        "[A] Descargar  [B] Volver  [Flechas] Navegar",
+        "[B] Cancelar",
+        "[A] Cambiar/Seleccionar  [B] Volver"
+    }
+};
+
 typedef enum {
     STATE_LOADING,
     STATE_MENU,
     STATE_LIST,
     STATE_DOWNLOADING,
-    STATE_CONVERTING
+    STATE_CONVERTING,
+    STATE_SETTINGS
 } AppState;
 
 typedef enum {
@@ -49,16 +86,41 @@ void apply_filter() {
     }
 }
 
+void get_install_path(char *buffer, size_t size) {
+    struct stat st = {0};
+    if (stat("/switch/ppsspp/config/ppsspp/PSP/GAME", &st) != -1) {
+        snprintf(buffer, size, "/switch/ppsspp/config/ppsspp/PSP/GAME");
+    } else {
+        if (stat("/PPSSPP", &st) == -1) {
+            mkdir("/PPSSPP", 0777);
+        }
+        snprintf(buffer, size, "/PPSSPP");
+    }
+}
+
+void mkdir_p(const char *path) {
+    char tmp[512];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if(tmp[len - 1] == '/')
+        tmp[len - 1] = 0;
+    for(p = tmp + 1; *p; p++)
+        if(*p == '/') {
+            *p = 0;
+            mkdir(tmp, 0777);
+            *p = '/';
+        }
+    mkdir(tmp, 0777);
+}
+
 int main(int argc, char* argv[]) {
     socketInitializeDefault();
     nxlinkStdio();
     consoleInit(NULL);
     
-    struct stat st = {0};
-    if (stat("/PPSSPP", &st) == -1) {
-        mkdir("/PPSSPP", 0777);
-    }
-
     db_buffer = (char*)malloc(DB_BUFFER_SIZE);
     if (!db_buffer) { printf("Memory Error.\n"); return -1; }
 
@@ -70,10 +132,10 @@ int main(int argc, char* argv[]) {
     int menu_idx = 0;
     int list_idx = 0;
     int list_top = 0;
+    int settings_idx = 0;
     
-    const char *menu_opts[] = {"SEARCH", "ALL GAMES", "# (NUMBERS)", "JAPAN (JP)"};
     char letters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    int menu_size = 4 + 26; 
+    int menu_size = 5 + 26; 
 
     int v_timer = 0;
     int h_timer = 0;
@@ -110,8 +172,12 @@ int main(int argc, char* argv[]) {
         else { h_timer = 0; }
 
         if (state == STATE_LOADING) {
-            printf("\x1b[1;36mDownloading DB...\x1b[0m\n");
+            consoleClear();
+            ui_draw_header("npsp v1.18 - Loading...");
+            printf("\n  Downloading Database...\n");
+            ui_draw_footer("Please wait...");
             consoleUpdate(NULL);
+            
             struct MemoryStruct chunk = {malloc(1), 0};
             CURL *curl = curl_easy_init();
             if(curl) {
@@ -129,26 +195,26 @@ int main(int argc, char* argv[]) {
                 parse_db(db_buffer);
                 state = STATE_MENU;
             } else {
-                printf("DB Error.\n");
+                printf("\n  DB Error. Check internet connection.\n");
                 while(1) { padUpdate(&pad); consoleUpdate(NULL); }
             }
             free(chunk.memory);
         }
         else if (state == STATE_MENU) {
             consoleClear();
-            printf("\x1b[1;33m--- npsp v1.18 by joaqmiu ---\x1b[0m\n\n");
+            ui_draw_header("npsp v1.20 - by joaqmiu");
             
+            printf("\n");
             for(int i = 0; i < menu_size; i++) {
                 if(i == menu_idx) printf("\x1b[47;30m");
-                if(i < 4) printf(" %s \n", menu_opts[i]);
+                if(i < 5) printf(" %s \n", languages[current_lang].main_menu[i]);
                 else {
-                    printf(" %c \n", letters[i-4]);
+                    printf(" %c \n", letters[i-5]);
                 }
                 if(i == menu_idx) printf("\x1b[0m");
             }
             
-            printf("\n\n\n\n\x1b[32mUse D-PAD to navigate, A to select.\x1b[0m");
-            printf("\n\x1b[90mCredits: joaqmiu\x1b[0m");
+            ui_draw_footer(languages[current_lang].footer_menu);
 
             if(move_down) {
                 if (menu_idx < menu_size - 1) menu_idx++;
@@ -178,12 +244,15 @@ int main(int argc, char* argv[]) {
                         }
                         swkbdClose(&kbd);
                     }
+                } else if (menu_idx == 4) {
+                    state = STATE_SETTINGS;
+                    settings_idx = 0;
                 } else {
                     if(menu_idx == 1) current_filter = FILTER_ALL;
                     else if(menu_idx == 2) current_filter = FILTER_NUM;
                     else if(menu_idx == 3) current_filter = FILTER_JP;
                     else {
-                        current_letter = letters[menu_idx - 4];
+                        current_letter = letters[menu_idx - 5];
                         current_filter = FILTER_LETTER;
                     }
                     apply_filter();
@@ -192,12 +261,60 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+        else if (state == STATE_SETTINGS) {
+            consoleClear();
+            char header_buf[64];
+            snprintf(header_buf, 64, "npsp v1.18 - %s", languages[current_lang].title_settings);
+            ui_draw_header(header_buf);
+            
+            printf("\n");
+            for(int i = 0; i < 3; i++) {
+                if(i == settings_idx) printf("\x1b[47;30m");
+                printf(" %s \n", languages[current_lang].settings_menu[i]);
+                if(i == settings_idx) printf("\x1b[0m");
+            }
+
+            ui_draw_footer(languages[current_lang].footer_settings);
+
+            if(move_down) {
+                if(settings_idx < 2) settings_idx++;
+            }
+            if(move_up) {
+                if(settings_idx > 0) settings_idx--;
+            }
+            
+            if(kDown & HidNpadButton_A) {
+                if(settings_idx == 0) {
+                    current_lang = (current_lang + 1) % LANG_COUNT;
+                }
+                else if(settings_idx == 1) {
+                    mkdir_p("/switch/ppsspp/config/ppsspp/PSP/Cheats");
+                    int res = download_file(URL_CHEATS, "/switch/ppsspp/config/ppsspp/PSP/Cheats/cheat.db", &pad, "DOWNLOADING CHEATS...");
+                    consoleClear();
+                    ui_draw_header("npsp - Cheats");
+                    if(res == 1) printf("\n\n  \x1b[1;32m%s\x1b[0m\n", languages[current_lang].status_done);
+                    else printf("\n\n  \x1b[1;31m%s\x1b[0m\n", languages[current_lang].status_error);
+                    printf("  %s", languages[current_lang].msg_press_a);
+                    ui_draw_footer(languages[current_lang].footer_settings);
+                    consoleUpdate(NULL);
+                    while(1) {
+                        padUpdate(&pad);
+                        if(padGetButtonsDown(&pad) & HidNpadButton_A) break;
+                    }
+                }
+                else if(settings_idx == 2) {
+                    state = STATE_MENU;
+                }
+            }
+            if(kDown & HidNpadButton_B) state = STATE_MENU;
+        }
         else if (state == STATE_LIST) {
             consoleClear();
-            printf("\x1b[1;36mRESULTS: %d\x1b[0m\n", filtered_count);
-            printf("--------------------------------------------------\n");
+            char header_buf[64];
+            snprintf(header_buf, 64, "npsp > %s (%d)", languages[current_lang].msg_results, filtered_count);
+            ui_draw_header(header_buf);
 
-            if(filtered_count == 0) printf("No games found.\n");
+            if(filtered_count == 0) printf("\n  %s\n", languages[current_lang].msg_no_games);
             else {
                 for(int i = 0; i < PAGE_SIZE; i++) {
                     int actual_idx = list_top + i;
@@ -212,6 +329,8 @@ int main(int argc, char* argv[]) {
                     if(actual_idx == list_idx) printf("\x1b[0m");
                 }
             }
+            
+            ui_draw_footer(languages[current_lang].footer_list);
 
             if(move_down) {
                 if(list_idx < filtered_count - 1) {
@@ -249,37 +368,47 @@ int main(int argc, char* argv[]) {
             strncpy(safe_name, g->name, 255); safe_name[255] = '\0';
             sanitize_filename(safe_name);
             
-            char pkg_path[512], pbp_path[512];
-            snprintf(pkg_path, sizeof(pkg_path), "/PPSSPP/%s_temp.pkg", safe_name);
-            snprintf(pbp_path, sizeof(pbp_path), "/PPSSPP/%s.PBP", safe_name);
+            char base_path[256];
+            get_install_path(base_path, sizeof(base_path));
             
-            int result = download_file(g->url, pkg_path, &pad);
+            char pkg_path[1024], pbp_path[1024];
+            snprintf(pkg_path, sizeof(pkg_path), "%s/%s_temp.pkg", base_path, safe_name);
+            snprintf(pbp_path, sizeof(pbp_path), "%s/%s.PBP", base_path, safe_name);
             
-            consoleClear(); 
+            char header_buf[128];
+            snprintf(header_buf, 128, "npsp > %s", languages[current_lang].status_downloading);
+
+            int result = download_file(g->url, pkg_path, &pad, header_buf);
+            
+            consoleClear();
+            ui_draw_header(header_buf);
 
             if(result == 1) {
                 state = STATE_CONVERTING;
                 
-                printf("\x1b[1;36mCONVERTING...\x1b[0m\n");
-                printf("Verifying PKG and extracting EBOOT.PBP...\n");
+                printf("\n\n  %s\n", languages[current_lang].status_converting);
+                ui_draw_footer("Please wait...");
                 consoleUpdate(NULL); 
 
                 if (convert_pkg_to_pbp(pkg_path, pbp_path)) {
                     remove(pkg_path); 
-                    printf("\n\n\x1b[1;32mDONE!\x1b[0m\n");
-                    printf("Saved to: %s\n", pbp_path);
+                    printf("\n\n  \x1b[1;32m%s\x1b[0m\n", languages[current_lang].status_done);
+                    printf("  Saved to: %s\n", pbp_path);
                 } else {
-                    printf("\n\n\x1b[1;31mCONVERSION ERROR.\x1b[0m\n");
+                    printf("\n\n  \x1b[1;31mERROR.\x1b[0m\n");
                     remove(pkg_path); 
                     remove(pbp_path);
                 }
-                printf("\n\nPress A to return...");
+                printf("\n\n  %s", languages[current_lang].msg_press_a);
+                ui_draw_footer(languages[current_lang].footer_settings);
             } else if (result == -1) {
-                printf("\n\n\x1b[1;33mCANCELLED.\x1b[0m\n");
-                printf("Press A to return...");
+                printf("\n\n  \x1b[1;33m%s\x1b[0m\n", languages[current_lang].status_cancel);
+                printf("  %s", languages[current_lang].msg_press_a);
+                ui_draw_footer(languages[current_lang].footer_settings);
             } else {
-                printf("\n\n\x1b[1;31mDOWNLOAD ERROR.\x1b[0m\n");
-                printf("Press A to return...");
+                printf("\n\n  \x1b[1;31m%s\x1b[0m\n", languages[current_lang].status_error);
+                printf("  %s", languages[current_lang].msg_press_a);
+                ui_draw_footer(languages[current_lang].footer_settings);
             }
             
             consoleUpdate(NULL); 

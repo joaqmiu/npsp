@@ -13,6 +13,7 @@ typedef struct {
     CURL *curl;
     int cancel_requested;
     unsigned int counter;
+    const char *header_title;
 } ProgressContext;
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -55,27 +56,31 @@ static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow
         double fraction = (double)dlnow / (double)dltotal;
         int percentage = (int)(fraction * 100);
         
-        int bar_width = 30;
+        consoleClear();
+        ui_draw_header(ctx->header_title);
+        
+        printf("\n\n  Progress: %3d%%\n", percentage);
+        printf("  Downloaded: %.1f / %.1f MB\n", (double)dlnow / (1024*1024), (double)dltotal / (1024*1024));
+        printf("  Speed: %.2f MB/s\n\n", current_speed);
+
+        int bar_width = 60;
         int pos = bar_width * fraction;
 
-        printf("\r\x1b[K [");
+        printf("  [");
         for (int i = 0; i < bar_width; ++i) {
             if (i < pos) printf("=");
             else if (i == pos) printf(">");
             else printf(" ");
         }
-        printf("] %3d%% (%.1f / %.1f MB) @ %.2f MB/s", 
-               percentage, 
-               (double)dlnow / (1024*1024), 
-               (double)dltotal / (1024*1024),
-               current_speed);
-        
+        printf("]\n");
+
+        ui_draw_footer(languages[current_lang].status_cancel);
         consoleUpdate(NULL);
     }
     return 0;
 }
 
-int download_file(const char *url, const char *path, PadState *pad) {
+int download_file(const char *url, const char *path, PadState *pad, const char *header_title) {
     CURL *curl;
     FILE *fp;
     CURLcode res;
@@ -84,6 +89,7 @@ int download_file(const char *url, const char *path, PadState *pad) {
     ctx.pad = pad;
     ctx.cancel_requested = 0;
     ctx.counter = 0;
+    ctx.header_title = header_title;
 
     curl = curl_easy_init();
     if (curl) {
@@ -95,9 +101,9 @@ int download_file(const char *url, const char *path, PadState *pad) {
         }
         
         consoleClear();
-        printf("\x1b[1;33mDOWNLOADING PKG...\x1b[0m\n");
-        printf("Temp file: %s\n", path);
-        printf("\x1b[1;31m[B] CANCEL\x1b[0m\n\n");
+        ui_draw_header(header_title);
+        printf("\n\n  Initializing download...\n  %s\n", path);
+        ui_draw_footer(languages[current_lang].status_cancel);
         consoleUpdate(NULL);
 
         curl_easy_setopt(curl, CURLOPT_URL, url);

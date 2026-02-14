@@ -3,6 +3,8 @@
 
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
+#include <switch.h>
 
 #define MAX_GAMES 6000
 #define DB_BUFFER_SIZE (6 * 1024 * 1024)
@@ -14,6 +16,53 @@ typedef struct {
     char *name;
     char *url;
 } GameEntry;
+
+typedef enum {
+    LANG_EN,
+    LANG_PT,
+    LANG_ES,
+    LANG_COUNT
+} Language;
+
+typedef struct {
+    const char *main_menu[5];
+    const char *settings_menu[3];
+    const char *status_downloading;
+    const char *status_converting;
+    const char *status_done;
+    const char *status_error;
+    const char *status_cancel;
+    const char *msg_press_a;
+    const char *msg_no_games;
+    const char *msg_results;
+    const char *title_settings;
+    const char *lang_name;
+    const char *footer_menu;
+    const char *footer_list;
+    const char *footer_dl;
+    const char *footer_settings;
+} LangStrings;
+
+extern int current_lang;
+extern const LangStrings languages[LANG_COUNT];
+
+static inline void ui_draw_header(const char *title) {
+    printf("\x1b[0;0H"); 
+    printf("\x1b[44;37m"); 
+    char buf[81];
+    snprintf(buf, sizeof(buf), " %-78.78s", title);
+    printf("%s", buf);
+    printf("\x1b[0m\n"); 
+}
+
+static inline void ui_draw_footer(const char *text) {
+    printf("\x1b[45;0H"); 
+    printf("\x1b[47;30m"); 
+    char buf[81];
+    snprintf(buf, sizeof(buf), " %-78.78s", text);
+    printf("%s", buf);
+    printf("\x1b[0m");
+}
 
 static inline char *stristr(const char *haystack, const char *needle) {
     if (!*needle) return (char *)haystack;
