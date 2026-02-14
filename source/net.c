@@ -12,8 +12,6 @@ typedef struct {
     PadState *pad;
     CURL *curl;
     int cancel_requested;
-    time_t last_time;
-    double current_speed;
     unsigned int counter;
 } ProgressContext;
 
@@ -35,46 +33,45 @@ static size_t WriteFileCallback(void *ptr, size_t size, size_t nmemb, void *stre
 
 static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
     ProgressContext *ctx = (ProgressContext *)clientp;
-    padUpdate(ctx->pad);
-    u64 kDown = padGetButtonsDown(ctx->pad);
+    ctx->counter++;
 
-    if (kDown & HidNpadButton_B) {
-        ctx->cancel_requested = 1;
-        return 1;
+    if ((ctx->counter & 0x1F) == 0) {
+        padUpdate(ctx->pad);
+        u64 kDown = padGetButtonsDown(ctx->pad);
+
+        if (kDown & HidNpadButton_B) {
+            ctx->cancel_requested = 1;
+            return 1;
+        }
     }
 
-    ctx->counter++;
-    if ((ctx->counter & 0xF) != 0) return 0;
+    if ((ctx->counter & 0x1FF) == 0) {
+        if (dltotal <= 0) return 0;
 
-    if (dltotal <= 0) return 0;
-
-    time_t now = time(NULL);
-    if (now - ctx->last_time >= 2) {
         curl_off_t speed_bps = 0;
         curl_easy_getinfo(ctx->curl, CURLINFO_SPEED_DOWNLOAD_T, &speed_bps);
-        ctx->current_speed = (double)speed_bps / (1024.0 * 1024.0);
-        ctx->last_time = now;
-    }
+        double current_speed = (double)speed_bps / (1024.0 * 1024.0);
 
-    double fraction = (double)dlnow / (double)dltotal;
-    int percentage = (int)(fraction * 100);
-    
-    int bar_width = 30;
-    int pos = bar_width * fraction;
+        double fraction = (double)dlnow / (double)dltotal;
+        int percentage = (int)(fraction * 100);
+        
+        int bar_width = 30;
+        int pos = bar_width * fraction;
 
-    printf("\r\x1b[K [");
-    for (int i = 0; i < bar_width; ++i) {
-        if (i < pos) printf("=");
-        else if (i == pos) printf(">");
-        else printf(" ");
+        printf("\r\x1b[K [");
+        for (int i = 0; i < bar_width; ++i) {
+            if (i < pos) printf("=");
+            else if (i == pos) printf(">");
+            else printf(" ");
+        }
+        printf("] %3d%% (%.1f / %.1f MB) @ %.2f MB/s", 
+               percentage, 
+               (double)dlnow / (1024*1024), 
+               (double)dltotal / (1024*1024),
+               current_speed);
+        
+        consoleUpdate(NULL);
     }
-    printf("] %3d%% (%.1f / %.1f MB) @ %.2f MB/s", 
-           percentage, 
-           (double)dlnow / (1024*1024), 
-           (double)dltotal / (1024*1024),
-           ctx->current_speed);
-    
-    consoleUpdate(NULL);
     return 0;
 }
 
@@ -86,8 +83,6 @@ int download_file(const char *url, const char *path, PadState *pad) {
     ProgressContext ctx;
     ctx.pad = pad;
     ctx.cancel_requested = 0;
-    ctx.last_time = 0;
-    ctx.current_speed = 0.0;
     ctx.counter = 0;
 
     curl = curl_easy_init();
