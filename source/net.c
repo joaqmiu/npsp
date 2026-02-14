@@ -14,6 +14,7 @@ typedef struct {
     int cancel_requested;
     time_t last_time;
     double current_speed;
+    unsigned int counter;
 } ProgressContext;
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -41,6 +42,9 @@ static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow
         ctx->cancel_requested = 1;
         return 1;
     }
+
+    ctx->counter++;
+    if ((ctx->counter & 0xF) != 0) return 0;
 
     if (dltotal <= 0) return 0;
 
@@ -84,6 +88,7 @@ int download_file(const char *url, const char *path, PadState *pad) {
     ctx.cancel_requested = 0;
     ctx.last_time = 0;
     ctx.current_speed = 0.0;
+    ctx.counter = 0;
 
     curl = curl_easy_init();
     if (curl) {
