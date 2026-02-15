@@ -24,7 +24,9 @@ const LangStrings languages[LANG_COUNT] = {
         "[A] Select  [Arrows] Navigate",
         "[A] Download  [B] Back  [Arrows] Navigate",
         "[B] Cancel",
-        "[A] Change/Select  [B] Back"
+        "[A] Change/Select  [B] Back",
+        "Select Download Speed",
+        {"Slow/Stable", "Good/Recom.", "Fast/Unstable"}
     },
     { 
         {"PESQUISAR", "TODOS OS JOGOS", "# (NUMEROS)", "JAPAO (JP)", "OPCOES"},
@@ -34,7 +36,9 @@ const LangStrings languages[LANG_COUNT] = {
         "[A] Selecionar  [Setas] Navegar",
         "[A] Baixar  [B] Voltar  [Setas] Navegar",
         "[B] Cancelar",
-        "[A] Alterar/Selecionar  [B] Voltar"
+        "[A] Alterar/Selecionar  [B] Voltar",
+        "Selecione a Velocidade",
+        {"Lento/Estavel", "Boa/Recomendo", "Rapido/Instavel"}
     },
     { 
         {"BUSCAR", "TODOS LOS JUEGOS", "# (NUMEROS)", "JAPON (JP)", "OPCIONES"},
@@ -44,7 +48,9 @@ const LangStrings languages[LANG_COUNT] = {
         "[A] Seleccionar  [Flechas] Navegar",
         "[A] Descargar  [B] Volver  [Flechas] Navegar",
         "[B] Cancelar",
-        "[A] Cambiar/Seleccionar  [B] Volver"
+        "[A] Cambiar/Seleccionar  [B] Volver",
+        "Seleccionar Velocidad",
+        {"Lento/Estable", "Buena/Rec.", "Rapido/Inestable"}
     }
 };
 
@@ -52,6 +58,7 @@ typedef enum {
     STATE_LOADING,
     STATE_MENU,
     STATE_LIST,
+    STATE_SELECT_SPEED,
     STATE_DOWNLOADING,
     STATE_CONVERTING,
     STATE_SETTINGS
@@ -70,6 +77,7 @@ int filtered_count = 0;
 char current_search[256] = "";
 char current_letter = 'A';
 FilterMode current_filter = FILTER_ALL;
+int selected_threads = 4;
 
 void apply_filter() {
     filtered_count = 0;
@@ -121,6 +129,8 @@ int main(int argc, char* argv[]) {
     nxlinkStdio();
     consoleInit(NULL);
     
+    load_config(); 
+
     db_buffer = (char*)malloc(DB_BUFFER_SIZE);
     if (!db_buffer) { printf("Memory Error.\n"); return -1; }
 
@@ -133,6 +143,7 @@ int main(int argc, char* argv[]) {
     int list_idx = 0;
     int list_top = 0;
     int settings_idx = 0;
+    int speed_idx = 1;
     
     char letters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     int menu_size = 5 + 26; 
@@ -173,7 +184,7 @@ int main(int argc, char* argv[]) {
 
         if (state == STATE_LOADING) {
             consoleClear();
-            ui_draw_header("npsp v1.18 - Loading...");
+            ui_draw_header("npsp v1.21 loading...");
             printf("\n  Downloading Database...\n");
             ui_draw_footer("Please wait...");
             consoleUpdate(NULL);
@@ -202,7 +213,7 @@ int main(int argc, char* argv[]) {
         }
         else if (state == STATE_MENU) {
             consoleClear();
-            ui_draw_header("npsp v1.20 - by joaqmiu");
+            ui_draw_header("npsp v1.21 - by joaqmiu");
             
             printf("\n");
             for(int i = 0; i < menu_size; i++) {
@@ -264,7 +275,7 @@ int main(int argc, char* argv[]) {
         else if (state == STATE_SETTINGS) {
             consoleClear();
             char header_buf[64];
-            snprintf(header_buf, 64, "npsp v1.18 - %s", languages[current_lang].title_settings);
+            snprintf(header_buf, 64, "npsp v1.21 - %s", languages[current_lang].title_settings);
             ui_draw_header(header_buf);
             
             printf("\n");
@@ -286,10 +297,11 @@ int main(int argc, char* argv[]) {
             if(kDown & HidNpadButton_A) {
                 if(settings_idx == 0) {
                     current_lang = (current_lang + 1) % LANG_COUNT;
+                    save_config(); 
                 }
                 else if(settings_idx == 1) {
                     mkdir_p("/switch/ppsspp/config/ppsspp/PSP/Cheats");
-                    int res = download_file(URL_CHEATS, "/switch/ppsspp/config/ppsspp/PSP/Cheats/cheat.db", &pad, "DOWNLOADING CHEATS...");
+                    int res = download_file(URL_CHEATS, "/switch/ppsspp/config/ppsspp/PSP/Cheats/cheat.db", &pad, "DOWNLOADING CHEATS...", 1);
                     consoleClear();
                     ui_draw_header("npsp - Cheats");
                     if(res == 1) printf("\n\n  \x1b[1;32m%s\x1b[0m\n", languages[current_lang].status_done);
@@ -360,7 +372,38 @@ int main(int argc, char* argv[]) {
             if(list_top < 0) list_top = 0;
 
             if(kDown & HidNpadButton_B) state = STATE_MENU;
-            if(kDown & HidNpadButton_A && filtered_count > 0) state = STATE_DOWNLOADING;
+            if(kDown & HidNpadButton_A && filtered_count > 0) {
+                state = STATE_SELECT_SPEED;
+                speed_idx = 1; 
+            }
+        }
+        else if (state == STATE_SELECT_SPEED) {
+            consoleClear();
+            ui_draw_header(languages[current_lang].speed_select_title);
+            printf("\n");
+            
+            for(int i = 0; i < 3; i++) {
+                if(i == speed_idx) printf("\x1b[47;30m");
+                printf(" %s \n", languages[current_lang].speed_options[i]);
+                if(i == speed_idx) printf("\x1b[0m");
+            }
+            
+            ui_draw_footer(languages[current_lang].footer_settings);
+
+            if(move_down) {
+                if(speed_idx < 2) speed_idx++;
+            }
+            if(move_up) {
+                if(speed_idx > 0) speed_idx--;
+            }
+            
+            if(kDown & HidNpadButton_A) {
+                if(speed_idx == 0) selected_threads = 1;
+                else if(speed_idx == 1) selected_threads = 4;
+                else selected_threads = 8;
+                state = STATE_DOWNLOADING;
+            }
+            if(kDown & HidNpadButton_B) state = STATE_LIST;
         }
         else if (state == STATE_DOWNLOADING) {
             GameEntry *g = filtered_games[list_idx];
@@ -378,7 +421,7 @@ int main(int argc, char* argv[]) {
             char header_buf[128];
             snprintf(header_buf, 128, "npsp > %s", languages[current_lang].status_downloading);
 
-            int result = download_file(g->url, pkg_path, &pad, header_buf);
+            int result = download_file(g->url, pkg_path, &pad, header_buf, selected_threads);
             
             consoleClear();
             ui_draw_header(header_buf);

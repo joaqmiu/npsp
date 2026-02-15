@@ -17,7 +17,7 @@ struct MemoryStruct {
     size_t size;
 };
 
-int download_file(const char *url, const char *path, PadState *pad, const char *header_title);
+int download_file(const char *url, const char *path, PadState *pad, const char *header_title, int num_threads);
 void parse_db(char *data);
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp);
 

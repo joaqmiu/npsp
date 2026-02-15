@@ -1,20 +1,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <curl/curl.h>
+#include <switch.h>
 #include "net.h"
+
+#define MAX_PARTS 8
 
 GameEntry all_games[MAX_GAMES];
 int total_games = 0;
 char *db_buffer = NULL;
 
 typedef struct {
+    FILE *fp;
+    long start_offset;
+    long current_offset;
+    curl_off_t total_written;
+} PartContext;
+
+typedef struct {
     PadState *pad;
-    CURL *curl;
-    int cancel_requested;
-    unsigned int counter;
+    curl_off_t total_size;
+    curl_off_t total_downloaded;
     const char *header_title;
-} ProgressContext;
+    unsigned int update_counter;
+    int cancel_requested;
+} MultiProgressContext;
+
+static MultiProgressContext *g_progress_ctx = NULL;
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
@@ -28,106 +41,179 @@ size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *user
     return realsize;
 }
 
-static size_t WriteFileCallback(void *ptr, size_t size, size_t nmemb, void *stream) {
-    return fwrite(ptr, size, nmemb, (FILE *)stream);
-}
+static size_t WritePartCallback(void *ptr, size_t size, size_t nmemb, void *userp) {
+    size_t realsize = size * nmemb;
+    PartContext *ctx = (PartContext *)userp;
 
-static int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
-    ProgressContext *ctx = (ProgressContext *)clientp;
-    ctx->counter++;
-
-    if ((ctx->counter & 0x1F) == 0) {
-        padUpdate(ctx->pad);
-        u64 kDown = padGetButtonsDown(ctx->pad);
-
-        if (kDown & HidNpadButton_B) {
-            ctx->cancel_requested = 1;
-            return 1;
-        }
-    }
-
-    if ((ctx->counter & 0x1FF) == 0) {
-        if (dltotal <= 0) return 0;
-
-        curl_off_t speed_bps = 0;
-        curl_easy_getinfo(ctx->curl, CURLINFO_SPEED_DOWNLOAD_T, &speed_bps);
-        double current_speed = (double)speed_bps / (1024.0 * 1024.0);
-
-        double fraction = (double)dlnow / (double)dltotal;
-        int percentage = (int)(fraction * 100);
-        
-        consoleClear();
-        ui_draw_header(ctx->header_title);
-        
-        printf("\n\n  Progress: %3d%%\n", percentage);
-        printf("  Downloaded: %.1f / %.1f MB\n", (double)dlnow / (1024*1024), (double)dltotal / (1024*1024));
-        printf("  Speed: %.2f MB/s\n\n", current_speed);
-
-        int bar_width = 60;
-        int pos = bar_width * fraction;
-
-        printf("  [");
-        for (int i = 0; i < bar_width; ++i) {
-            if (i < pos) printf("=");
-            else if (i == pos) printf(">");
-            else printf(" ");
-        }
-        printf("]\n");
-
-        ui_draw_footer(languages[current_lang].status_cancel);
-        consoleUpdate(NULL);
-    }
-    return 0;
-}
-
-int download_file(const char *url, const char *path, PadState *pad, const char *header_title) {
-    CURL *curl;
-    FILE *fp;
-    CURLcode res;
+    fseek(ctx->fp, ctx->current_offset, SEEK_SET);
+    size_t written = fwrite(ptr, 1, realsize, ctx->fp);
     
-    ProgressContext ctx;
-    ctx.pad = pad;
-    ctx.cancel_requested = 0;
-    ctx.counter = 0;
-    ctx.header_title = header_title;
+    ctx->current_offset += written;
+    ctx->total_written += written;
 
-    curl = curl_easy_init();
-    if (curl) {
-        ctx.curl = curl;
-        fp = fopen(path, "wb");
-        if(!fp) {
-            curl_easy_cleanup(curl);
-            return 0;
+    if (g_progress_ctx) {
+        g_progress_ctx->total_downloaded += written;
+        g_progress_ctx->update_counter++;
+
+        if ((g_progress_ctx->update_counter & 0xFF) == 0) {
+            padUpdate(g_progress_ctx->pad);
+            u64 kDown = padGetButtonsDown(g_progress_ctx->pad);
+            if (kDown & HidNpadButton_B) {
+                g_progress_ctx->cancel_requested = 1;
+                return 0;
+            }
+
+            consoleClear();
+            ui_draw_header(g_progress_ctx->header_title);
+            
+            double fraction = (double)g_progress_ctx->total_downloaded / (double)g_progress_ctx->total_size;
+            if (fraction > 1.0) fraction = 1.0;
+            int percentage = (int)(fraction * 100);
+            
+            printf("\n\n");
+            printf("  %s: %3d%%\n", 
+                   (current_lang == LANG_PT) ? "Progresso" : ((current_lang == LANG_ES) ? "Progreso" : "Progress"), 
+                   percentage);
+            
+            printf("  %s: %.2f / %.2f MB\n",
+                   (current_lang == LANG_PT) ? "Baixado" : ((current_lang == LANG_ES) ? "Descargado" : "Downloaded"),
+                   (double)g_progress_ctx->total_downloaded / (1024*1024), 
+                   (double)g_progress_ctx->total_size / (1024*1024));
+
+            printf("\n  [");
+            int bar_width = 50;
+            int pos = bar_width * fraction;
+            for (int i = 0; i < bar_width; ++i) {
+                if (i < pos) printf("\x1b[32m#\x1b[0m"); 
+                else if (i == pos) printf("\x1b[32m>\x1b[0m");
+                else printf("\x1b[30m-\x1b[0m");
+            }
+            printf("]\n");
+
+            ui_draw_footer(languages[current_lang].status_cancel);
+            consoleUpdate(NULL);
         }
-        
-        consoleClear();
-        ui_draw_header(header_title);
-        printf("\n\n  Initializing download...\n  %s\n", path);
-        ui_draw_footer(languages[current_lang].status_cancel);
-        consoleUpdate(NULL);
+    }
 
+    return written;
+}
+
+static double get_file_size(const char *url) {
+    double filesize = 0.0;
+    CURL *curl = curl_easy_init();
+    if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteFileCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "NPS-Switch/4.0");
-        
-        res = curl_easy_perform(curl);
-        
-        fclose(fp);
-        curl_easy_cleanup(curl);
-        
-        if (ctx.cancel_requested) {
-            remove(path);
-            return -1;
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+        if (curl_easy_perform(curl) == CURLE_OK) {
+            curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &filesize);
         }
-        return (res == CURLE_OK);
+        curl_easy_cleanup(curl);
     }
-    return 0;
+    return filesize;
+}
+
+int download_file(const char *url, const char *path, PadState *pad, const char *header_title, int num_threads) {
+    CURLM *multi_handle;
+    CURL *easy_handles[MAX_PARTS];
+    PartContext part_ctx[MAX_PARTS];
+    int still_running = 0;
+    int i;
+    
+    if (num_threads < 1) num_threads = 1;
+    if (num_threads > MAX_PARTS) num_threads = MAX_PARTS;
+
+    double remote_size = get_file_size(url);
+    if (remote_size <= 0.0) return 0;
+    
+    curl_off_t file_size = (curl_off_t)remote_size;
+    curl_off_t part_size = file_size / num_threads;
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return 0;
+    
+    fseek(fp, file_size - 1, SEEK_SET);
+    fputc(0, fp);
+    fseek(fp, 0, SEEK_SET);
+
+    MultiProgressContext prog_ctx;
+    prog_ctx.pad = pad;
+    prog_ctx.total_size = file_size;
+    prog_ctx.total_downloaded = 0;
+    prog_ctx.header_title = header_title;
+    prog_ctx.update_counter = 0;
+    prog_ctx.cancel_requested = 0;
+    g_progress_ctx = &prog_ctx;
+
+    multi_handle = curl_multi_init();
+
+    for (i = 0; i < num_threads; i++) {
+        part_ctx[i].fp = fp;
+        part_ctx[i].start_offset = i * part_size;
+        part_ctx[i].current_offset = part_ctx[i].start_offset;
+        part_ctx[i].total_written = 0;
+
+        curl_off_t end_offset = (i == num_threads - 1) ? file_size - 1 : (part_ctx[i].start_offset + part_size - 1);
+        char range_buf[64];
+        snprintf(range_buf, sizeof(range_buf), "%ld-%ld", part_ctx[i].start_offset, end_offset);
+
+        easy_handles[i] = curl_easy_init();
+        curl_easy_setopt(easy_handles[i], CURLOPT_URL, url);
+        curl_easy_setopt(easy_handles[i], CURLOPT_WRITEFUNCTION, WritePartCallback);
+        curl_easy_setopt(easy_handles[i], CURLOPT_WRITEDATA, &part_ctx[i]);
+        curl_easy_setopt(easy_handles[i], CURLOPT_RANGE, range_buf);
+        curl_easy_setopt(easy_handles[i], CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_USERAGENT, "NPS-Switch/4.0");
+        
+        curl_easy_setopt(easy_handles[i], CURLOPT_CONNECTTIMEOUT, 30L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_LOW_SPEED_TIME, 30L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_LOW_SPEED_LIMIT, 10L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_TCP_KEEPALIVE, 1L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_FAILONERROR, 1L);
+        
+        curl_multi_add_handle(multi_handle, easy_handles[i]);
+    }
+
+    consoleClear();
+    ui_draw_header(header_title);
+    printf("\n\n  %s...\n", (current_lang == LANG_PT) ? "Iniciando" : ((current_lang == LANG_ES) ? "Iniciando" : "Initializing"));
+    consoleUpdate(NULL);
+
+    do {
+        int numfds;
+        CURLMcode mc = curl_multi_perform(multi_handle, &still_running);
+        if (mc == CURLM_OK) {
+            curl_multi_wait(multi_handle, NULL, 0, 1000, &numfds);
+        }
+        if (prog_ctx.cancel_requested) break;
+    } while (still_running);
+
+    int error_detected = 0;
+    CURLMsg *msg;
+    int msgs_left;
+    while ((msg = curl_multi_info_read(multi_handle, &msgs_left))) {
+        if (msg->msg == CURLMSG_DONE) {
+            if (msg->data.result != CURLE_OK) error_detected = 1;
+        }
+    }
+
+    for (i = 0; i < num_threads; i++) {
+        curl_multi_remove_handle(multi_handle, easy_handles[i]);
+        curl_easy_cleanup(easy_handles[i]);
+    }
+    curl_multi_cleanup(multi_handle);
+    fclose(fp);
+    g_progress_ctx = NULL;
+
+    if (prog_ctx.cancel_requested || error_detected) {
+        remove(path);
+        return -1;
+    }
+
+    return (prog_ctx.total_downloaded >= file_size);
 }
 
 void parse_db(char *data) {
