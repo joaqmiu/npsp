@@ -18,17 +18,6 @@ typedef struct {
     curl_off_t total_written;
 } PartContext;
 
-typedef struct {
-    PadState *pad;
-    curl_off_t total_size;
-    curl_off_t total_downloaded;
-    const char *header_title;
-    unsigned int update_counter;
-    int cancel_requested;
-} MultiProgressContext;
-
-static MultiProgressContext *g_progress_ctx = NULL;
-
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct MemoryStruct *mem = (struct MemoryStruct *)userp;
@@ -44,57 +33,10 @@ size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *user
 static size_t WritePartCallback(void *ptr, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     PartContext *ctx = (PartContext *)userp;
-
     fseek(ctx->fp, ctx->current_offset, SEEK_SET);
     size_t written = fwrite(ptr, 1, realsize, ctx->fp);
-    
     ctx->current_offset += written;
     ctx->total_written += written;
-
-    if (g_progress_ctx) {
-        g_progress_ctx->total_downloaded += written;
-        g_progress_ctx->update_counter++;
-
-        if ((g_progress_ctx->update_counter & 0xFF) == 0) {
-            padUpdate(g_progress_ctx->pad);
-            u64 kDown = padGetButtonsDown(g_progress_ctx->pad);
-            if (kDown & HidNpadButton_B) {
-                g_progress_ctx->cancel_requested = 1;
-                return 0;
-            }
-
-            consoleClear();
-            ui_draw_header(g_progress_ctx->header_title);
-            
-            double fraction = (double)g_progress_ctx->total_downloaded / (double)g_progress_ctx->total_size;
-            if (fraction > 1.0) fraction = 1.0;
-            int percentage = (int)(fraction * 100);
-            
-            printf("\n\n");
-            printf("  %s: %3d%%\n", 
-                   (current_lang == LANG_PT) ? "Progresso" : ((current_lang == LANG_ES) ? "Progreso" : "Progress"), 
-                   percentage);
-            
-            printf("  %s: %.2f / %.2f MB\n",
-                   (current_lang == LANG_PT) ? "Baixado" : ((current_lang == LANG_ES) ? "Descargado" : "Downloaded"),
-                   (double)g_progress_ctx->total_downloaded / (1024*1024), 
-                   (double)g_progress_ctx->total_size / (1024*1024));
-
-            printf("\n  [");
-            int bar_width = 50;
-            int pos = bar_width * fraction;
-            for (int i = 0; i < bar_width; ++i) {
-                if (i < pos) printf("\x1b[32m#\x1b[0m"); 
-                else if (i == pos) printf("\x1b[32m>\x1b[0m");
-                else printf("\x1b[30m-\x1b[0m");
-            }
-            printf("]\n");
-
-            ui_draw_footer(languages[current_lang].status_cancel);
-            consoleUpdate(NULL);
-        }
-    }
-
     return written;
 }
 
@@ -121,31 +63,23 @@ int download_file(const char *url, const char *path, PadState *pad, const char *
     PartContext part_ctx[MAX_PARTS];
     int still_running = 0;
     int i;
-    
+    int cancel_requested = 0;
+
     if (num_threads < 1) num_threads = 1;
     if (num_threads > MAX_PARTS) num_threads = MAX_PARTS;
 
     double remote_size = get_file_size(url);
     if (remote_size <= 0.0) return 0;
-    
+
     curl_off_t file_size = (curl_off_t)remote_size;
     curl_off_t part_size = file_size / num_threads;
 
     FILE *fp = fopen(path, "wb");
     if (!fp) return 0;
-    
+
     fseek(fp, file_size - 1, SEEK_SET);
     fputc(0, fp);
     fseek(fp, 0, SEEK_SET);
-
-    MultiProgressContext prog_ctx;
-    prog_ctx.pad = pad;
-    prog_ctx.total_size = file_size;
-    prog_ctx.total_downloaded = 0;
-    prog_ctx.header_title = header_title;
-    prog_ctx.update_counter = 0;
-    prog_ctx.cancel_requested = 0;
-    g_progress_ctx = &prog_ctx;
 
     multi_handle = curl_multi_init();
 
@@ -168,8 +102,8 @@ int download_file(const char *url, const char *path, PadState *pad, const char *
         curl_easy_setopt(easy_handles[i], CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(easy_handles[i], CURLOPT_USERAGENT, "NPS-Switch/4.0");
         
-        curl_easy_setopt(easy_handles[i], CURLOPT_CONNECTTIMEOUT, 30L);
-        curl_easy_setopt(easy_handles[i], CURLOPT_LOW_SPEED_TIME, 30L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_CONNECTTIMEOUT, 15L);
+        curl_easy_setopt(easy_handles[i], CURLOPT_LOW_SPEED_TIME, 15L);
         curl_easy_setopt(easy_handles[i], CURLOPT_LOW_SPEED_LIMIT, 10L);
         curl_easy_setopt(easy_handles[i], CURLOPT_TCP_KEEPALIVE, 1L);
         curl_easy_setopt(easy_handles[i], CURLOPT_FAILONERROR, 1L);
@@ -182,13 +116,66 @@ int download_file(const char *url, const char *path, PadState *pad, const char *
     printf("\n\n  %s...\n", (current_lang == LANG_PT) ? "Iniciando" : ((current_lang == LANG_ES) ? "Iniciando" : "Initializing"));
     consoleUpdate(NULL);
 
+    u64 last_time = armGetSystemTick();
+    curl_off_t last_downloaded = 0;
+    
     do {
         int numfds;
         CURLMcode mc = curl_multi_perform(multi_handle, &still_running);
+        
         if (mc == CURLM_OK) {
-            curl_multi_wait(multi_handle, NULL, 0, 1000, &numfds);
+            curl_multi_wait(multi_handle, NULL, 0, 100, &numfds);
         }
-        if (prog_ctx.cancel_requested) break;
+
+        padUpdate(pad);
+        if (padGetButtonsDown(pad) & HidNpadButton_B) {
+            cancel_requested = 1;
+            break;
+        }
+
+        u64 current_time = armGetSystemTick();
+        if (current_time - last_time >= armGetSystemTickFreq() / 2) { 
+            curl_off_t total_downloaded = 0;
+            for (int k = 0; k < num_threads; k++) {
+                total_downloaded += part_ctx[k].total_written;
+            }
+
+            double speed = (double)(total_downloaded - last_downloaded) * 2.0; 
+            last_downloaded = total_downloaded;
+            last_time = current_time;
+
+            double fraction = (double)total_downloaded / (double)file_size;
+            if (fraction > 1.0) fraction = 1.0;
+            int percentage = (int)(fraction * 100);
+
+            consoleClear();
+            ui_draw_header(header_title);
+            
+            printf("\n\n");
+            printf("  %s: %3d%%\n", 
+                   (current_lang == LANG_PT) ? "Progresso" : ((current_lang == LANG_ES) ? "Progreso" : "Progress"), 
+                   percentage);
+            
+            printf("  %s: %.2f / %.2f MB (%.2f MB/s)\n",
+                   (current_lang == LANG_PT) ? "Baixado" : ((current_lang == LANG_ES) ? "Descargado" : "Downloaded"),
+                   (double)total_downloaded / (1024*1024), 
+                   (double)file_size / (1024*1024),
+                   speed / (1024*1024));
+
+            printf("\n  [");
+            int bar_width = 50;
+            int pos = bar_width * fraction;
+            for (int k = 0; k < bar_width; ++k) {
+                if (k < pos) printf("\x1b[32m#\x1b[0m"); 
+                else if (k == pos) printf("\x1b[32m>\x1b[0m");
+                else printf("\x1b[30m-\x1b[0m");
+            }
+            printf("]\n");
+
+            ui_draw_footer(languages[current_lang].status_cancel);
+            consoleUpdate(NULL);
+        }
+
     } while (still_running);
 
     int error_detected = 0;
@@ -206,14 +193,18 @@ int download_file(const char *url, const char *path, PadState *pad, const char *
     }
     curl_multi_cleanup(multi_handle);
     fclose(fp);
-    g_progress_ctx = NULL;
 
-    if (prog_ctx.cancel_requested || error_detected) {
+    if (cancel_requested || error_detected) {
         remove(path);
         return -1;
     }
 
-    return (prog_ctx.total_downloaded >= file_size);
+    curl_off_t final_size = 0;
+    for (i = 0; i < num_threads; i++) {
+        final_size += part_ctx[i].total_written;
+    }
+
+    return (final_size >= file_size);
 }
 
 void parse_db(char *data) {
