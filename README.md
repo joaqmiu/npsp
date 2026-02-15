@@ -6,8 +6,8 @@
 
 ## 🚀 Installation Guide
 
-1.  **Download the tool**: Get the latest version from [assets/npsp.zip](assets/npsp.zip).
-2.  **Extract the archive**: Unzip the `npsp.zip` file on your computer.
+1.  **Download the tool**: Get the latest version from the [Latest Release](https://github.com/joaqmiu/npsp/releases/latest).
+2.  **Extract the archive**: Unzip the downloaded `.zip` file on your computer.
 3.  **Transfer to SD Card**: Copy the extracted `switch` folder and paste it into the **root of your microSD card**.
     * *Note: If prompted to merge folders, select "Yes" or "Replace".*
 4.  **Launch**: Open the **Homebrew Menu** or **Sphaira** on your Switch and select **npsp** to start.
