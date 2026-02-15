@@ -63,7 +63,7 @@ To compile **npsp**, you must have the **devkitPro** environment installed with 
 1. Clone the repository.
 2. Ensure your `icon.png` (256x256) is in the root directory.
 3. Run `make` in your terminal.
-4. Copy the resulting `npsp.nro` to the `/switch/` folder on your SD card.
+4. Copy the resulting `npsp.nro` to the `/switch/npsp/` folder on your SD card.
 
 ---
 
