@@ -12,7 +12,7 @@
     * *Note: If prompted to merge folders, select "Yes" or "Replace".*
 4.  **Launch**: Open the **Homebrew Menu** or **Sphaira** on your Switch and select **npsp** to start.
 
-ℹ️ Access your downloaded games in Homebrews & Demos or the PPSSPP directory at the root of the memory card (check the path shown in the download results).
+ℹ️ Access your downloaded games in Homebrews & Demos or the PPSSPP directory at the root of the SD Card (check the path shown in the download results).
 
 ---
 
